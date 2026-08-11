@@ -1,13 +1,6 @@
 """
 Geophone Intrusion Detection Dashboard - Demo Backend
 ------------------------------------------------------
-가짜 지오폰 신호를 생성해 대시보드를 시연합니다.
-peak 누적 개수를 기준으로 STABLE -> SUSPICIOUS -> WALK -> INTRUSION 4단계로 판정합니다.
-
-실행:
-    pip install -r requirements.txt
-    python app.py
-브라우저: http://localhost:8000
 """
 
 import asyncio
@@ -40,7 +33,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Geophone Intrusion Detection Dashboard", lifespan=lifespan)
 
 # ---------------------------------------------------------------
-# 학습된 RandomForest 모델 로드 (har_geophone_rf_model_v1.pkl)
+# 학습된 RandomForest 모델 로드
 # ---------------------------------------------------------------
 MODEL_PATH = Path(__file__).parent / "model" / "har_geophone_rf_model_v1_fixed.pkl"
 try:
@@ -54,11 +47,11 @@ except Exception as e:
     MODEL_LOADED = False
     print(f"[경고] 모델을 불러오지 못했습니다 ({e}). model/{MODEL_PATH.name} 파일 위치를 확인하세요.")
 
-# 모델/알고리즘에 이미 적용돼 있다고 가정한 고정 threshold (감도 UI는 제거)
+# 모델/알고리즘에 이미 적용돼 있다고 가정한 고정 threshold
 LOW_THRESHOLD = 3.0
 WALK_WINDOW_SEC = 2.0
 
-
+# 대시보드의 전체 상태 저장
 class SystemState:
     def __init__(self):
         self.mode = "DISARMED"  # "ARMED" | "DISARMED"
@@ -100,7 +93,6 @@ async def broadcast_json(payload: dict):
 
 
 async def set_mode(new_mode: str, source: str):
-    """모드를 바꾸고, 연결된 모든 클라이언트에게 즉시 알림 (버튼 클릭이든 자동 스케줄이든 동일하게 처리)"""
     if new_mode == state.mode:
         return
     state.mode = new_mode
@@ -159,9 +151,9 @@ async def get_status():
 
 
 # ---------------------------------------------------------------
-# 가짜 신호 생성기 (나중에 실제 ADC 읽기로 교체할 부분)
+# 가짜 신호 생성기 (하드웨어 연결이 안되어 있을 경우)
 # ---------------------------------------------------------------
-FS = 50
+FS = 100
 NOISE_LEVEL = 0.00005
 _walk_burst_remaining = 0
 _walk_burst_phase = 0.0
@@ -189,9 +181,7 @@ def generate_fake_signal() -> float:
 
 class StreamProcessor:
     """
-    보행 감지 알고리즘 PDF의 배치(offline) 로직을 실시간 스트리밍용으로 이식.
-    #1 캘리브레이션 -> #2 threshold 기반 1차 peak 탐지 -> #3 여진 제거
-    -> #4 11개 feature 추출 -> #5 모델 예측 -> #6 다수결 필터
+    보행 감지 알고리즘 로직을 실시간 스트리밍용으로
     """
 
     # peak 후보의 하강 구간까지 다 채워질 시간을 잠깐 기다렸다가 확정 (find_peaks가 온전한 모양을 보게 하기 위함)
@@ -200,6 +190,7 @@ class StreamProcessor:
     MIN_PROMINENCE = 4.0
     MIN_WIDTH_SEC = 0.05
     MAX_WIDTH_SEC = 0.50
+
     VOTING_WINDOW = 3
     VOTING_WALK_THRESHOLD = 2
 
@@ -207,7 +198,7 @@ class StreamProcessor:
     ECHO_TIME_SEC = 2.0
     ECHO_RATIO = 0.3
 
-    # 최종 walk 판정: 확률 기반 + 연속성 체크 (참고 코드와 동일 기준)
+    # 최종 walk 판정: 확률 기반 + 연속성 체크
     WALK_SCORE_THRESHOLD = 0.75
     GAP_RESET_SEC = 1.0
 
@@ -222,7 +213,8 @@ class StreamProcessor:
         self.z_history = deque(maxlen=5000)    # (t, z) - peak 탐지용 (약 8초 분량 유지)
         self.t = 0.0
         self._last_t_wall = None  # 실제 하드웨어가 보내주는 타임스탬프 추적용
-        # 데모용 초기 캘리브레이션 값 (실제로는 quiet_base 파일로 계산해야 함 - PDF #1 단계)
+
+        # 데모용 초기 캘리브레이션 값
         self.global_med = 0.00005
         self.global_mad = 0.0000077
 
@@ -254,7 +246,7 @@ class StreamProcessor:
     def _current_fs(self) -> float:
         """
         최근 버퍼의 실제 타임스탬프 간격으로 유효 샘플링레이트를 추정.
-        가짜 신호(50Hz)든 실제 하드웨어(예: ~68.5Hz)든 코드 수정 없이 자동으로 맞춰 씀.
+        가짜 신호든 실제 하드웨어든 코드 수정 없이 자동으로 맞춰 씀.
         """
         if len(self.z_history) < 10:
             return FS
@@ -267,7 +259,6 @@ class StreamProcessor:
 
     def add_sample(self, voltage: float, t_wall: Optional[float] = None):
         # 실제 하드웨어가 타임스탬프(t_wall)를 같이 보내주면 그걸로 실제 경과시간을 반영.
-        # (가짜 신호처럼 t_wall이 없으면 FS 기준 명목상 간격만큼 흘려보냄)
         if t_wall is not None and self._last_t_wall is not None:
             dt = t_wall - self._last_t_wall
             self.t += dt if dt > 0 else 1.0 / FS
@@ -312,7 +303,7 @@ class StreamProcessor:
         }
 
     def _process_calibration_sample(self, voltage: float) -> dict:
-        """5초간 조용함을 확인하며 global_med/global_mad를 새로 계산 (참고 코드의 캘리브레이션 단계와 동일)."""
+        """5초간 조용함을 확인하며 global_med/global_mad를 새로 계산"""
         if self._cal_chunk_start_t is None:
             self._cal_chunk_start_t = self.t
         self._cal_chunk.append(voltage)
@@ -379,7 +370,7 @@ class StreamProcessor:
             return None
         self.processed_peak_times.add(peak_time)
 
-        # ---- PDF #3 단계와 동일한 여진(echo) 제거: 최근 2초 내 더 큰 peak 대비 30% 미만 크기면 무시 ----
+        # 여진(echo) 제거: 최근 2초 내 더 큰 peak 대비 30% 미만 크기면 무시
         for prev in reversed(self.confirmed_peaks):
             dt = peak_time - prev["time"]
             if dt > self.ECHO_TIME_SEC:
@@ -387,7 +378,7 @@ class StreamProcessor:
             if peak_height < prev["height"] * self.ECHO_RATIO:
                 return None  # 여진으로 판단 -> confirmed_peaks에도 추가하지 않고 그냥 무시
 
-        # ---- PDF #4 단계와 동일한 11개 feature 추출 ----
+        # 11개 feature 추출
         prominence = float(peak_prominences(zvals, [latest_idx])[0][0])
         width_sec = float(peak_widths(zvals, [latest_idx], rel_height=0.5)[0][0] / fs)
 
@@ -439,30 +430,43 @@ class StreamProcessor:
         self.confirmed_peaks.append({"time": peak_time, "height": peak_height, "prominence": prominence})
         self.confirmed_peaks = [p for p in self.confirmed_peaks if peak_time - p["time"] < 5.0]
 
-        # ---- PDF #6 단계 다수결 필터 + 확률(walk_score) + 연속성(continuity) 체크 ----
-        # (peak 1개만으로는 절대 최종 walk로 인정하지 않음 - 최소 2표 이상 필요)
+        # 다수결 필터 + 확률(walk_score) + 연속성(continuity) 체크
+        peak_label = "walk" if pred_binary == 1 else "noise"
+
+        # 최근 모델 예측 결과 저장
         self.recent_votes.append(pred_binary)
         walk_votes = sum(self.recent_votes)
         continuity_ok = (
-            is_first_peak == 0
-            and interval_prev <= self.GAP_RESET_SEC
-            and recent_peak_count_2s >= 1
-        )
-        final_walk = (
-            len(self.recent_votes) >= 2
-            and walk_votes >= self.VOTING_WALK_THRESHOLD
-            and pred_binary == 1
-            and walk_score >= self.WALK_SCORE_THRESHOLD
-            and continuity_ok
+                is_first_peak == 0
+                and interval_prev <= self.GAP_RESET_SEC
+                and recent_peak_count_2s >= 1
         )
 
-        if final_walk:
-            self.recent_walk_times.append(peak_time)
+        # 최종 보행 확정
+        # 첫 번째 walk peak 하나만으로는 보행 이벤트로 확정하지 않음
+        final_walk = (
+                len(self.recent_votes) >= 2
+                and walk_votes >= self.VOTING_WALK_THRESHOLD
+                and pred_binary == 1
+                and walk_score >= self.WALK_SCORE_THRESHOLD
+                and continuity_ok
+        )
+
+        if pred_binary == 1:
+            # 모델이 walk peak라고 판단한 경우
+            # 첫 번째 발걸음이어도 여기에 들어옴
+            if final_walk:
+                # 연속성/voting까지 만족한 최종 보행
+                self.recent_walk_times.append(peak_time)
         else:
+            # 모델 자체가 noise라고 판단한 경우만 noise로 저장
             self.recent_noise_times.append(peak_time)
 
         return {
-            "label": "walk" if final_walk else "noise",
+            "label": peak_label,
+            "final_walk": final_walk,
+            "pred_binary": pred_binary,
+            "walk_score": walk_score,
             "time": peak_time,
             "height": peak_height,  # 실제 peak 지점의 z값 (지금 이 순간의 z가 아님)
             "lag_samples": max(0, round((self.t - peak_time) * fs)),  # 몇 틱 전에 실제로 일어났는지
@@ -475,15 +479,6 @@ processor = StreamProcessor()
 def compute_current_state():
     """
     모델이 최종 확정한 peak 라벨(walk/noise) 기반 판정. ARMED와 DISARMED는 서로 다른 상태 집합을 가짐.
-
-    ARMED(외출 모드): 침입 감지가 활성화된 상태이므로 확정된 보행이 곧 침입.
-        - 최근 2초 내 확정 walk peak 없음: STABLE (noise peak만 있으면 SUSPICIOUS)
-        - 최근 2초 내 noise peak만 있음: SUSPICIOUS - 애매함, 조금 더 지켜봄
-        - 최근 2초 내 확정 walk peak 있음: INTRUSION
-
-    DISARMED(복귀 모드): 침입 감지를 하지 않는 상태이므로 보행은 그냥 보행.
-        - 확정 walk peak 없음: STABLE
-        - 확정 walk peak 있음: WALK - 정상적인 보행 (침입 아님)
     """
     now = processor.t
     has_recent_walk = any(now - pt <= WALK_WINDOW_SEC for pt in processor.recent_walk_times)
@@ -574,7 +569,6 @@ async def ingest_endpoint(websocket: WebSocket):
     """
     실제 Geophone/ADC 쪽(라즈베리파이 등)에서 붙는 엔드포인트.
     { "voltage": 0.000123 } 형태의 JSON을 계속 보내주면 됨.
-    이 연결이 살아있는 동안은 가짜 신호 생성기가 자동으로 멈춤.
     """
     await websocket.accept()
     was_connected = state.hardware_connected
