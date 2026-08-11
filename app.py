@@ -35,7 +35,7 @@ app = FastAPI(title="Geophone Intrusion Detection Dashboard", lifespan=lifespan)
 # ---------------------------------------------------------------
 # 학습된 RandomForest 모델 로드
 # ---------------------------------------------------------------
-MODEL_PATH = Path(__file__).parent / "model" / "har_geophone_rf_model_v1_fixed.pkl"
+MODEL_PATH = Path(__file__).parent / "model" / "har_geophone_rf_model_v1_fixed2.pkl"
 try:
     ML_MODEL = joblib.load(MODEL_PATH)
     FEATURE_COLS = list(ML_MODEL.feature_names_in_)
