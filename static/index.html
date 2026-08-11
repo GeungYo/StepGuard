@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Geophone · Intrusion Detection</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg: #0a0e13;
+    --panel: #10161f;
+    --panel-2: #151d29;
+    --line: #1f2937;
+    --text: #e6ebf1;
+    --muted: #6b7684;
+    --accent: #4f8cff;
+    --safe: #2fd47a;
+    --warn: #f5a524;
+    --danger: #ef4a5c;
+    --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    --sans: "Inter", -apple-system, "Segoe UI", sans-serif;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:var(--sans); padding:20px; transition: background .4s, color .4s;
+  }
+  /* ARMED 상태일 때 라이트 테마로 전환 */
+  body.theme-armed{
+    --bg:#f5f6f8; --panel:#ffffff; --panel-2:#f0f1f4; --text:#12161c;
+    --muted:#6b7684; --line:#e1e3e8;
+  }
+
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:18px; padding-bottom:14px; border-bottom:1px solid var(--line);
+  }
+  .brand{ display:flex; align-items:center; gap:10px; font-weight:600; letter-spacing:.3px; }
+  .brand .dot{ width:8px; height:8px; border-radius:50%; background:var(--safe); box-shadow:0 0 8px var(--safe); }
+  .brand small{ color:var(--muted); font-weight:400; margin-left:6px; }
+  .clock{ font-family:var(--mono); color:var(--muted); font-size:14px; }
+
+  .grid{ display:grid; grid-template-columns: 300px 1fr 300px; gap:16px; }
+  @media (max-width: 1100px){ .grid{ grid-template-columns: 1fr; } }
+
+  .panel{
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:16px; transition: background .4s, border-color .4s;
+  }
+  .panel h3{
+    margin:0 0 12px; font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--muted); font-weight:600;
+  }
+
+  /* ---------------- 상태 카드 (큰 이모지 + 4단계 판정) ---------------- */
+  .status-card{ text-align:center; padding:26px 14px; }
+  .status-icon{
+    font-size:64px; line-height:1; margin-bottom:8px;
+    filter:drop-shadow(0 0 14px currentColor);
+  }
+  .status-title{
+    font-family:var(--mono); font-weight:800; font-size:26px; letter-spacing:.05em;
+  }
+  .status-sub{ font-size:12px; color:var(--muted); margin-top:4px; margin-bottom:18px; }
+
+  .status-card.state-STABLE .status-icon,
+  .status-card.state-STABLE .status-title{ color:var(--safe); }
+  .status-card.state-WALK .status-icon,
+  .status-card.state-WALK .status-title{ color:var(--accent); }
+  .status-card.state-SUSPICIOUS .status-icon,
+  .status-card.state-SUSPICIOUS .status-title{ color:var(--warn); }
+  .status-card.state-INTRUSION .status-icon,
+  .status-card.state-INTRUSION .status-title{ color:var(--danger); animation: pulseText 1s infinite; }
+
+  @keyframes pulseText{ 0%,100%{ opacity:1; } 50%{ opacity:.45; } }
+
+  .risk-row{ display:flex; align-items:center; gap:8px; margin-bottom:18px; }
+  .risk-row span{ font-size:11px; color:var(--muted); white-space:nowrap; }
+  .risk-bar{ flex:1; height:6px; background:var(--panel-2); border-radius:3px; overflow:hidden; }
+  .risk-fill{ height:100%; width:20%; background:var(--safe); transition:width .3s, background .3s; }
+  .risk-value{ font-family:var(--mono); font-weight:700; font-size:11px; color:var(--text); }
+
+  .mode-row{ display:flex; gap:8px; }
+  .btn{
+    flex:1; padding:10px; border-radius:8px; border:1px solid var(--line);
+    background:var(--panel-2); color:var(--text); font-family:var(--sans);
+    font-weight:600; font-size:13px; cursor:pointer; transition:.15s;
+  }
+  .btn:hover{ border-color:var(--accent); }
+  .btn.active-armed{ background:rgba(239,74,92,.15); border-color:var(--danger); color:var(--danger); }
+  .btn.active-disarmed{ background:rgba(47,212,122,.15); border-color:var(--safe); color:var(--safe); }
+
+  /* ---------------- 설정 패널 ---------------- */
+  .field{ margin-bottom:16px; }
+  .field label{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
+  .time-row{ display:flex; align-items:center; gap:8px; }
+  .time-row input{
+    flex:1; background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    padding:8px; border-radius:6px; font-family:var(--mono); font-size:13px;
+  }
+
+  .stat-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:4px; }
+  .stat{ background:var(--panel-2); border-radius:8px; padding:10px; text-align:center; }
+  .stat .num{ font-family:var(--mono); font-size:20px; font-weight:700; }
+  .stat .lab{ font-size:10px; color:var(--muted); margin-top:2px; }
+
+  /* ---------------- 차트 ---------------- */
+  .chart-wrap{ height:180px; margin-bottom:8px; }
+  .chart-title{ font-size:11px; color:var(--muted); margin-bottom:6px; display:flex; justify-content:space-between; }
+  .chart-legend{ display:flex; gap:14px; margin-bottom:8px; font-size:10px; color:var(--muted); }
+  .chart-legend span{ display:flex; align-items:center; gap:5px; }
+  .chart-legend .dot{ width:7px; height:7px; border-radius:50%; display:inline-block; }
+  .chart-legend .dash{ width:12px; height:0; border-top:1px dashed var(--warn); display:inline-block; }
+
+  /* ---------------- 이벤트 로그 ---------------- */
+  .event-list{ max-height:260px; overflow-y:auto; }
+  .event-item{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:8px 0; border-bottom:1px solid var(--line); font-size:12px; gap:6px;
+  }
+  .event-item:last-child{ border-bottom:none; }
+  .event-tag{ font-family:var(--mono); font-weight:700; padding:2px 8px; border-radius:4px; font-size:10px; white-space:nowrap; }
+  .event-tag.WALK{ background:rgba(79,140,255,.15); color:var(--accent); }
+  .event-tag.SUSPICIOUS{ background:rgba(245,165,36,.15); color:var(--warn); }
+  .event-tag.INTRUSION{ background:rgba(239,74,92,.15); color:var(--danger); }
+  .event-time{ color:var(--muted); font-family:var(--mono); font-size:11px; }
+  .event-score{ color:var(--muted); font-family:var(--mono); font-size:10px; text-align:right; }
+  .event-score b{ color:var(--text); }
+  .empty-hint{ color:var(--muted); font-size:12px; text-align:center; padding:20px 0; }
+
+  /* ---------------- 모드 전환 오버레이 (3초 배너) ---------------- */
+  .mode-overlay{
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.6); opacity:0; visibility:hidden; transition:opacity .3s;
+    z-index:3000; pointer-events:none;
+  }
+  .mode-overlay.show{ opacity:1; visibility:visible; }
+  .mode-overlay-text{
+    font-family:var(--mono); font-weight:800; font-size:56px; letter-spacing:.12em;
+    padding:26px 60px; border-radius:16px; border:2px solid; background:var(--panel);
+  }
+  .mode-overlay-text.ARMED{ color:#ef4a5c; border-color:#ef4a5c; }
+  .mode-overlay-text.DISARMED{ color:#2fd47a; border-color:#2fd47a; }
+  .mode-overlay-sub{ display:block; font-family:var(--sans); font-size:14px; font-weight:500; margin-top:8px; letter-spacing:0; color:var(--muted); }
+
+  /* ---------------- INTRUSION 경고등 깜빡임 ---------------- */
+  @keyframes intrusionFlash{
+    0%,100%{ background: rgba(239,74,92,0); }
+    50%{ background: rgba(239,74,92,.28); }
+  }
+  body.intrusion-alert::before{
+    content:''; position:fixed; inset:0; pointer-events:none; z-index:1500;
+    animation: intrusionFlash 1s ease-in-out infinite;
+  }
+</style>
+</head>
+<body>
+
+<div class="mode-overlay" id="modeOverlay">
+  <div class="mode-overlay-text" id="modeOverlayText">ARMED
+    <span class="mode-overlay-sub" id="modeOverlaySub">외출 모드로 전환되었습니다</span>
+  </div>
+</div>
+
+<div class="mode-overlay" id="calOverlay">
+  <div class="mode-overlay-text" id="calOverlayText" style="color:var(--warn); border-color:var(--warn);">
+    영점 측정 중
+    <span class="mode-overlay-sub" id="calOverlaySub">조용히 해주세요... (0/5)</span>
+  </div>
+</div>
+
+<div class="topbar">
+  <div class="brand"><span class="dot" id="connDot"></span>Geophone <small id="hwLabel">Intrusion Detection · Demo</small></div>
+  <div class="clock" id="clock">--:--:--</div>
+</div>
+
+<div class="grid">
+
+  <!-- 좌측: 상태 + 제어 -->
+  <div style="display:flex; flex-direction:column; gap:16px;">
+    <div class="panel status-card state-STABLE" id="statusPanel">
+      <div class="status-icon" id="statusIcon">🛡️</div>
+      <div class="status-title" id="statusTitle">STABLE</div>
+      <div class="status-sub" id="statusSub">안정 상태</div>
+      <div class="risk-row">
+        <span>위험 레벨</span>
+        <div class="risk-bar"><div class="risk-fill" id="riskFill"></div></div>
+        <span class="risk-value" id="riskValue">LOW</span>
+      </div>
+      <div class="mode-row">
+        <button class="btn" id="armBtn">외출 (ARM)</button>
+        <button class="btn" id="disarmBtn">복귀 (DISARM)</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>허용 시간 (Allowed Time)</h3>
+      <div class="field">
+        <div class="time-row">
+          <input type="time" id="allowedStart" value="08:00">
+          <span style="color:var(--muted)">~</span>
+          <input type="time" id="allowedEnd" value="19:00">
+        </div>
+      </div>
+      <button class="btn" id="saveTimeBtn" style="width:100%;">적용</button>
+    </div>
+
+    <div class="panel">
+      <h3>영점 캘리브레이션</h3>
+      <p style="font-size:12px; color:var(--muted); margin:0 0 12px;">주변이 조용한 상태에서 눌러주세요 (5초 소요)</p>
+      <button class="btn" id="recalBtn" style="width:100%;">재보정 (Recalibrate)</button>
+    </div>
+  </div>
+
+  <!-- 중앙: 그래프 -->
+  <div style="display:flex; flex-direction:column; gap:16px;">
+    <div class="panel">
+      <div class="chart-title"><span>Raw Voltage</span><span id="voltageNow">0.000000</span></div>
+      <div class="chart-wrap"><canvas id="voltageChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="chart-title"><span>Z-Score Envelope</span><span id="zNow">0.0</span></div>
+      <div class="chart-legend">
+        <span><i class="dash"></i>Threshold</span>
+        <span><i class="dot" style="background:#4f8cff"></i>Noise Peak</span>
+        <span><i class="dot" style="background:#ef4a5c"></i>Walk Peak</span>
+      </div>
+      <div class="chart-wrap" style="height:220px;"><canvas id="zChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- 우측: 통계 + 이벤트 로그 -->
+  <div style="display:flex; flex-direction:column; gap:16px;">
+    <div class="panel">
+      <h3>오늘 통계</h3>
+      <div class="stat-grid">
+        <div class="stat"><div class="num" id="statWalk">0</div><div class="lab">보행 감지</div></div>
+        <div class="stat"><div class="num" id="statIntrusion" style="color:var(--danger)">0</div><div class="lab">침입 감지</div></div>
+      </div>
+    </div>
+    <div class="panel" style="flex:1;">
+      <h3>최근 이벤트</h3>
+      <div class="event-list" id="eventList">
+        <div class="empty-hint">아직 감지된 이벤트가 없습니다</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ---------- 시계 ----------
+function tickClock(){
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('ko-KR', {hour12:false});
+}
+setInterval(tickClock, 1000); tickClock();
+
+// ---------- 차트 세팅 ----------
+const MAX_POINTS = 300;
+
+const voltageChart = new Chart(document.getElementById('voltageChart'), {
+  type: 'line',
+  data: { labels: [], datasets: [{ data: [], borderColor:'#4f8cff', borderWidth:1, pointRadius:0, tension:0.1 }] },
+  options: {
+    animation:false, responsive:true, maintainAspectRatio:false,
+    scales: { x:{ display:false }, y:{ ticks:{ color:'#6b7684', font:{size:9} }, grid:{ color:'#1f2937' } } },
+    plugins: { legend:{ display:false } }
+  }
+});
+
+const zChart = new Chart(document.getElementById('zChart'), {
+  type: 'line',
+  data: { labels: [], datasets: [
+    { label:'Z-score', data: [], borderColor:'#e6ebf1', borderWidth:1.2, pointRadius:0, tension:0.1 },
+    { label:'Threshold', data: [], borderColor:'#f5a524', borderWidth:1, borderDash:[5,5], pointRadius:0 },
+    { label:'Noise Peak', data: [], showLine:false, backgroundColor:'#4f8cff', borderColor:'#4f8cff', pointRadius:5, pointHoverRadius:6 },
+    { label:'Walk Peak', data: [], showLine:false, backgroundColor:'#ef4a5c', borderColor:'#ef4a5c', pointRadius:5, pointHoverRadius:6 },
+  ]},
+  options: {
+    animation:false, responsive:true, maintainAspectRatio:false,
+    scales: { x:{ display:false }, y:{ ticks:{ color:'#6b7684', font:{size:9} }, grid:{ color:'#1f2937' } } },
+    plugins: { legend:{ display:false } }
+  }
+});
+
+function pushPoint(chart, idx, values){
+  chart.data.labels.push(idx);
+  values.forEach((v,i)=> chart.data.datasets[i].data.push(v));
+  if(chart.data.labels.length > MAX_POINTS){
+    chart.data.labels.shift();
+    chart.data.datasets.forEach(d=>d.data.shift());
+  }
+  chart.update('none');
+}
+
+function updateChartTheme(){
+  const light = document.body.classList.contains('theme-armed');
+  const gridColor = light ? '#e1e3e8' : '#1f2937';
+  const tickColor = light ? '#5b6472' : '#6b7684';
+  const lineColor = light ? '#12161c' : '#e6ebf1';
+  [voltageChart, zChart].forEach(c=>{
+    c.options.scales.y.grid.color = gridColor;
+    c.options.scales.y.ticks.color = tickColor;
+  });
+  zChart.data.datasets[0].borderColor = lineColor;
+  voltageChart.update('none'); zChart.update('none');
+}
+
+// ---------- 상태 카드 (STABLE / SUSPICIOUS / WALK / INTRUSION) ----------
+const STATE_META = {
+  STABLE:     { icon:'🛡️', sub:'안정 상태' },
+  WALK:       { icon:'🚶', sub:'보행 감지 (정상)' },
+  SUSPICIOUS: { icon:'⚠️', sub:'의심 활동 감지 · 확인 중' },
+  INTRUSION:  { icon:'🚨', sub:'침입 감지됨' },
+};
+const RISK_META = {
+  LOW:    { width:'20%', color:'#2fd47a' },
+  MEDIUM: { width:'55%', color:'#f5a524' },
+  HIGH:   { width:'100%', color:'#ef4a5c' },
+};
+
+let lastRenderedState = null;
+function updateStatusPanel(stateName, risk){
+  if(stateName === lastRenderedState) return;
+  lastRenderedState = stateName;
+
+  const panel = document.getElementById('statusPanel');
+  panel.className = 'panel status-card state-' + stateName;
+
+  const meta = STATE_META[stateName] || STATE_META.STABLE;
+  document.getElementById('statusIcon').textContent = meta.icon;
+  document.getElementById('statusTitle').textContent = stateName;
+  document.getElementById('statusSub').textContent = meta.sub;
+
+  const r = RISK_META[risk] || RISK_META.LOW;
+  document.getElementById('riskFill').style.width = r.width;
+  document.getElementById('riskFill').style.background = r.color;
+  document.getElementById('riskValue').textContent = risk;
+
+  document.body.classList.toggle('intrusion-alert', stateName === 'INTRUSION');
+}
+
+function addEvent(ev){
+  const list = document.getElementById('eventList');
+  const hint = list.querySelector('.empty-hint');
+  if(hint) hint.remove();
+  const item = document.createElement('div');
+  item.className = 'event-item';
+  item.innerHTML = `
+    <span class="event-time">${ev.time}</span>
+    <span class="event-tag ${ev.label}">${ev.label}</span>
+    <span class="event-score">z ${ev.z_score}<br><b>${ev.risk}</b></span>
+  `;
+  list.prepend(item);
+  while(list.children.length > 30) list.removeChild(list.lastChild);
+}
+
+// ---------- 모드 (ARMED / DISARMED) UI 반영 ----------
+let lastKnownMode = null;
+let overlayTimer = null;
+
+function applyMode(mode, showOverlay){
+  const changed = mode !== lastKnownMode;
+  lastKnownMode = mode;
+
+  document.getElementById('armBtn').className = 'btn' + (mode === 'ARMED' ? ' active-armed' : '');
+  document.getElementById('disarmBtn').className = 'btn' + (mode === 'DISARMED' ? ' active-disarmed' : '');
+  document.body.classList.toggle('theme-armed', mode === 'ARMED');
+  updateChartTheme();
+
+  if(showOverlay && changed){
+    const overlay = document.getElementById('modeOverlay');
+    const text = document.getElementById('modeOverlayText');
+    const sub = document.getElementById('modeOverlaySub');
+    text.className = 'mode-overlay-text ' + mode;
+    text.childNodes[0].textContent = mode + ' ';
+    sub.textContent = mode === 'ARMED' ? '외출 모드로 전환되었습니다' : '복귀 모드로 전환되었습니다';
+    overlay.classList.add('show');
+    clearTimeout(overlayTimer);
+    overlayTimer = setTimeout(()=> overlay.classList.remove('show'), 3000);
+  }
+}
+
+// ---------- WebSocket 연결 ----------
+let pointIdx = 0;
+function connect(){
+  const ws = new WebSocket(`ws://${location.host}/ws/stream`);
+  ws.onopen = ()=> document.getElementById('connDot').style.background = '#2fd47a';
+  ws.onclose = ()=> { document.getElementById('connDot').style.background = '#ef4a5c'; setTimeout(connect, 1500); };
+
+  ws.onmessage = (msg)=>{
+    const d = JSON.parse(msg.data);
+
+    if(d.type === 'mode_change'){
+      applyMode(d.mode, true);  // 버튼 클릭이든 자동 스케줄이든 배너 표시
+      return;
+    }
+
+    if(d.type === 'daily_reset'){
+      document.getElementById('statWalk').textContent = '0';
+      document.getElementById('statIntrusion').textContent = '0';
+      const list = document.getElementById('eventList');
+      list.innerHTML = '<div class="empty-hint">아직 감지된 이벤트가 없습니다</div>';
+      return;
+    }
+
+    if(d.type === 'calibration'){
+      document.getElementById('calOverlay').classList.add('show');
+      document.getElementById('calOverlaySub').textContent = `조용히 해주세요... (${d.progress})`;
+      return;
+    }
+
+    // 캘리브레이션이 끝나고 정상 샘플이 오기 시작하면 오버레이 숨김
+    document.getElementById('calOverlay').classList.remove('show');
+
+    // type === 'sample'
+    pointIdx++;
+    document.getElementById('voltageNow').textContent = d.voltage.toFixed(6);
+    document.getElementById('zNow').textContent = d.z.toFixed(1);
+    pushPoint(voltageChart, pointIdx, [d.voltage]);
+    // Noise/Walk Peak 마커는 확정 시점(0.3초 지연)이 아니라 실제 peak가 발생한 그 순간에 찍어야 하므로,
+    // 일단 이번 tick에는 null을 넣고 확정된 순간 과거 위치를 소급해서 정확한 높이로 채워넣는다.
+    pushPoint(zChart, pointIdx, [d.z, d.threshold, null, null]);
+    if(d.peak_type){
+      const datasetIdx = d.peak_type === 'walk' ? 3 : 2;
+      const dataArr = zChart.data.datasets[datasetIdx].data;
+      const targetPos = dataArr.length - 1 - (d.peak_lag_samples || 0);
+      if(targetPos >= 0){
+        dataArr[targetPos] = d.peak_height;
+        zChart.update('none');
+      }
+    }
+
+    document.getElementById('statWalk').textContent = d.stats.walk;
+    document.getElementById('statIntrusion').textContent = d.stats.intrusion;
+
+    applyMode(d.mode, false);  // 최초 동기화는 배너 없이 조용히
+    updateStatusPanel(d.current_state, d.risk);
+
+    const hwLabel = document.getElementById('hwLabel');
+    hwLabel.textContent = d.hardware_connected ? 'Intrusion Detection · 실제 Geophone 연결됨' : 'Intrusion Detection · Demo (가짜 신호)';
+    hwLabel.style.color = d.hardware_connected ? 'var(--safe)' : '';
+
+    if(d.event) addEvent(d.event);
+  };
+}
+connect();
+
+// ---------- 컨트롤 버튼 ----------
+document.getElementById('armBtn').onclick = ()=> fetch('/api/arm', {method:'POST'});
+document.getElementById('disarmBtn').onclick = ()=> fetch('/api/disarm', {method:'POST'});
+document.getElementById('saveTimeBtn').onclick = async ()=>{
+  const start = document.getElementById('allowedStart').value;
+  const end = document.getElementById('allowedEnd').value;
+  await fetch('/api/allowed-time', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({start, end})
+  });
+};
+document.getElementById('recalBtn').onclick = ()=> fetch('/api/recalibrate', {method:'POST'});
+</script>
+</body>
+</html>
