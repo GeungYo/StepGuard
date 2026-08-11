@@ -3,20 +3,6 @@ Geophone Sensor Client (Raspberry Pi 4 Model B에서 실행)
 ---------------------------------------------------------
 ADS1115(I2C ADC)로 Geophone 전압을 읽어서, 다른 건물에 있는 백엔드 서버로
 Tailscale을 통해 실시간 전송합니다.
-
-*** 중요: 아래 설정은 기존 학습 데이터(walk_fast_01.csv 등)를 분석해서 역산한
-값입니다. 학습 당시와 똑같은 게인 설정을 써야 모델이 제대로 동작합니다. ***
-    - GAIN = 16  (측정범위 ±0.256V, 1비트 = 7.8125uV) - CSV 전압값 양자화 단위와 정확히 일치 확인함
-    - 원래 데이터는 약 68.5Hz로 기록됨 (아래 TARGET_FS 참고)
-
-설치 (라즈베리파이에서):
-    pip install websockets adafruit-circuitpython-ads1x15 adafruit-blinka
-
-설정:
-    아래 SERVER_HOST를 랩실 컴퓨터의 Tailscale IP로 바꾸세요 (100.으로 시작하는 주소).
-
-실행:
-    python geophone_sender.py
 """
 
 import asyncio
@@ -25,12 +11,10 @@ import time
 
 import websockets
 
-# ---------------- 설정 (여기만 바꾸면 됨) ----------------
 SERVER_HOST = "100.112.45.74"      # 랩실 컴퓨터의 Tailscale IP
 SERVER_PORT = 8000
 TARGET_FS = 100                # 원래 학습 데이터를 만들 때의 샘플링레이트 (참고용 목표치)
 ADS_GAIN = 16                   # 측정범위 ±0.256V - 학습 데이터의 전압 양자화 단위(7.8125uV)와 정확히 일치
-# ----------------------------------------------------------
 
 WS_URL = f"ws://{SERVER_HOST}:{SERVER_PORT}/ws/ingest"
 
@@ -38,7 +22,6 @@ _ads_channel = None
 
 
 def read_voltage() -> float:
-    """ADS1115에서 전압 1개를 읽어옵니다. GAIN 설정이 학습 데이터와 동일해야 합니다."""
     global _ads_channel
     if _ads_channel is None:
         import board
@@ -48,7 +31,7 @@ def read_voltage() -> float:
 
         i2c = busio.I2C(board.SCL, board.SDA)
         ads = ADS.ADS1115(i2c)
-        ads.gain = ADS_GAIN  # *** 학습 데이터와 동일한 게인 - 절대 바꾸지 마세요 ***
+        ads.gain = ADS_GAIN
         _ads_channel = AnalogIn(ads, 0, 1) # A0 핀 사용
 
     return _ads_channel.voltage
